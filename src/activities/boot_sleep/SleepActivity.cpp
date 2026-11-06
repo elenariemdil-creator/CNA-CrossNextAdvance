@@ -448,7 +448,8 @@ bool findNextValidSleepImage(HalFile& dir, const SleepRecentKind recentKind, cha
   return false;
 }
 
-bool selectRandomSleepFile(const char* dirPath, const SleepRecentKind recentKind, std::string& selectedPath) {
+bool selectRandomSleepFile(const char* dirPath, const SleepRecentKind recentKind, std::string& selectedPath,
+                           uint16_t& selectedIndexOut) {
   auto dir = Storage.open(dirPath);
   if (!dir || !dir.isDirectory()) return false;
 
@@ -467,13 +468,21 @@ bool selectRandomSleepFile(const char* dirPath, const SleepRecentKind recentKind
   const uint8_t recentFill =
       recentKind == SleepRecentKind::Overlay ? APP_STATE.recentOverlaySleepFill : APP_STATE.recentSleepFill;
   const uint8_t window = static_cast<uint8_t>(std::min<uint16_t>(recentFill, fileCount - 1));
-  auto randomFileIndex = static_cast<uint16_t>(random(fileCount));
-  for (uint8_t attempt = 0; attempt < 20 && isRecentSleepIndex(recentKind, randomFileIndex, window); attempt++) {
-    randomFileIndex = static_cast<uint16_t>(random(fileCount));
+  uint16_t selectedIndex = 0;
+  if (recentKind == SleepRecentKind::Standard &&
+      SETTINGS.sleepScreenCycleOrder == CrossPointSettings::SLEEP_SCREEN_CYCLE_ORDERED) {
+    const uint16_t previous = APP_STATE.recentSleepImages[
+        (APP_STATE.recentSleepPos + CrossPointState::SLEEP_RECENT_COUNT - 1) % CrossPointState::SLEEP_RECENT_COUNT];
+    selectedIndex = recentFill && previous < fileCount ? static_cast<uint16_t>((previous + 1) % fileCount) : 0;
+  } else {
+    selectedIndex = static_cast<uint16_t>(random(fileCount));
+    for (uint8_t attempt = 0; attempt < 20 && isRecentSleepIndex(recentKind, selectedIndex, window); attempt++) {
+      selectedIndex = static_cast<uint16_t>(random(fileCount));
+    }
   }
 
   dir.rewindDirectory();
-  for (uint16_t index = 0; index <= randomFileIndex; ++index) {
+  for (uint16_t index = 0; index <= selectedIndex; ++index) {
     if (!findNextValidSleepImage(dir, recentKind, name.get())) return false;
   }
 
@@ -481,8 +490,7 @@ bool selectRandomSleepFile(const char* dirPath, const SleepRecentKind recentKind
   selectedPath = dirPath;
   selectedPath += "/";
   selectedPath += name.get();
-  pushRecentSleepIndex(recentKind, randomFileIndex);
-  APP_STATE.saveToFile();
+  selectedIndexOut = selectedIndex;
   return true;
 }
 
@@ -526,6 +534,8 @@ void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
 
 void SleepActivity::onEnter() {
   Activity::onEnter();
+  cycleSleepImage = APP_STATE.cycleSleepImageRequested;
+  APP_STATE.cycleSleepImageRequested = false;
 
   const bool renderQuickResume =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
@@ -627,6 +637,39 @@ void SleepActivity::onEnter() {
 }
 
 void SleepActivity::renderCustomSleepScreen() const {
+  std::string selectedPath;
+  uint16_t selectedIndex = 0;
+  const auto drawSelectedImage = [this](const std::string& path) {
+    HalFile imageFile;
+    if (!Storage.openFileForRead("SLP", path, imageFile)) return false;
+    LOG_DBG("SLP", "Loading: %s", path.c_str());
+    delay(100);
+    Bitmap bitmap(imageFile, true,
+                  renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported() &&
+                      display.getController() == HalDisplay::Controller::SSD1677 &&
+                      SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER);
+    if (bitmap.parseHeaders() != BmpReaderError::Ok) {
+      imageFile.close();
+      return false;
+    }
+    const bool rendered = renderBitmapSleepScreen(bitmap);
+    imageFile.close();
+    return rendered;
+  };
+  const auto drawRandomImage = [&](const char* directory) {
+    if (!selectRandomSleepFile(directory, SleepRecentKind::Standard, selectedPath, selectedIndex) ||
+        !drawSelectedImage(selectedPath)) {
+      return false;
+    }
+    pushRecentSleepIndex(SleepRecentKind::Standard, selectedIndex);
+    APP_STATE.saveToFile();
+    return true;
+  };
+
+  if (cycleSleepImage) {
+    if (drawRandomImage("/.sleep") || drawRandomImage("/sleep")) return;
+  }
+
   // Look for sleep.bmp on the root of the sd card to determine if we should
   // render a custom sleep screen instead of the default.
   // This takes priority over the /sleep folder.
@@ -645,28 +688,7 @@ void SleepActivity::renderCustomSleepScreen() const {
     file.close();
   }
 
-  std::string selectedPath;
-  if (!selectRandomSleepFile("/.sleep", SleepRecentKind::Standard, selectedPath)) {
-    selectRandomSleepFile("/sleep", SleepRecentKind::Standard, selectedPath);
-  }
-
-  if (!selectedPath.empty()) {
-    HalFile randFile;
-    if (Storage.openFileForRead("SLP", selectedPath, randFile)) {
-      LOG_DBG("SLP", "Randomly loading: %s", selectedPath.c_str());
-      delay(100);
-      Bitmap bitmap(randFile, true,
-                    renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported() &&
-                        display.getController() == HalDisplay::Controller::SSD1677 &&
-                        SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER);
-      if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-        renderBitmapSleepScreen(bitmap);
-        randFile.close();
-        return;
-      }
-      randFile.close();
-    }
-  }
+  if (!cycleSleepImage && (drawRandomImage("/.sleep") || drawRandomImage("/sleep"))) return;
 
   renderDefaultSleepScreen();
 }
@@ -692,7 +714,7 @@ void SleepActivity::renderDefaultSleepScreen() const {
   renderer.displayBuffer(kSleepClean);
 }
 
-void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool preserveBackground) const {
+bool SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool preserveBackground) const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
   const auto placement = calculateBitmapPlacement(bitmap.getWidth(), bitmap.getHeight(), renderer);
@@ -711,7 +733,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
 
   if (!renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY, preserveBackground)) {
     renderer.displayBuffer(kSleepClean);
-    return;
+    return false;
   }
 
   if (!preserveBackground &&
@@ -722,7 +744,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
   const bool absolute = hasGreyscale && renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported();
   if (absolute) {
     cleanBeforeAbsoluteGray(renderer);
-    if (!renderer.displayGrayscaleBase(sleepGrayscaleMode(renderer))) return;
+    if (!renderer.displayGrayscaleBase(sleepGrayscaleMode(renderer))) return false;
   } else if (hasGreyscale) {
     // OEM grayscale pipeline base. Must stay HALF: the gray nudge LUT is
     // calibrated against the pixel state the single-pass HALF waveform leaves
@@ -753,10 +775,14 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
     }
     if (ready)
       renderer.displayGrayBuffer();
-    else
+    else {
       LOG_ERR("SLP", "Incomplete grayscale image; keeping the current display");
+      renderer.setRenderMode(GfxRenderer::BW);
+      return false;
+    }
     renderer.setRenderMode(GfxRenderer::BW);
   }
+  return true;
 }
 
 bool SleepActivity::renderSleepOverlayFile(HalFile& file, const char* pathForLog) const {
@@ -774,8 +800,7 @@ bool SleepActivity::renderSleepOverlayFile(HalFile& file, const char* pathForLog
   LOG_DBG("SLP", "Rendering regular BMP sleep overlay: %s (%dx%d)", pathForLog, bitmap.getWidth(), bitmap.getHeight());
   // drawBitmap leaves white pixels untouched; skipping the initial clear makes
   // them transparent while retaining the existing grayscale pipeline.
-  renderBitmapSleepScreen(bitmap, true);
-  return true;
+  return renderBitmapSleepScreen(bitmap, true);
 }
 
 bool SleepActivity::renderTransparentOverlayPng(const std::string& path) const {
@@ -841,11 +866,19 @@ void SleepActivity::renderTransparentCustomSleepScreen() const {
   if (renderSleepOverlayPath(TRANSPARENT_SLEEP_ROOT_PNG)) return;
 
   std::string selectedPath;
-  if (!selectRandomSleepFile(TRANSPARENT_SLEEP_DIR, SleepRecentKind::Overlay, selectedPath)) {
-    selectRandomSleepFile(TRANSPARENT_SLEEP_LEGACY_DIR, SleepRecentKind::Overlay, selectedPath);
+  uint16_t selectedIndex = 0;
+  const char* selectedDirectory = TRANSPARENT_SLEEP_DIR;
+  if (!selectRandomSleepFile(selectedDirectory, SleepRecentKind::Overlay, selectedPath, selectedIndex)) {
+    selectedDirectory = TRANSPARENT_SLEEP_LEGACY_DIR;
+    if (!selectRandomSleepFile(selectedDirectory, SleepRecentKind::Overlay, selectedPath, selectedIndex))
+      selectedPath.clear();
   }
 
-  if (!selectedPath.empty() && renderSleepOverlayPath(selectedPath)) return;
+  if (!selectedPath.empty() && renderSleepOverlayPath(selectedPath)) {
+    pushRecentSleepIndex(SleepRecentKind::Overlay, selectedIndex);
+    APP_STATE.saveToFile();
+    return;
+  }
 
   LOG_ERR("SLP", "No valid transparent sleep overlay found");
   renderDefaultSleepScreen();

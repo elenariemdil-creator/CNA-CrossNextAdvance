@@ -258,7 +258,7 @@ inline void advanceQuest(State& state) {
 }
 
 inline void newGame(State& state, uint32_t seed) {
-  std::memset(&state, 0, sizeof(state));
+  state = State{};
   state.version = kStateVersion;
   state.seed = seed ? seed : 1;
   state.health = state.maxHealth = 100;
@@ -434,6 +434,8 @@ inline bool usePotion(State& state) {
 
 enum class BattleAction : uint8_t { Attack = 0, Guard = 1, Arcane = 2, Item = 3, Skill = 4, Escape = 5 };
 
+inline bool comboFinisherReady(const State& state) { return state.combo >= 3u; }
+
 inline const char* classSkillName(uint8_t classId) {
   static const char* names[] = {"Prism Break", "Battlefield Mend", "Umbral Execution", "System Overload"};
   return names[classId % 4u];
@@ -466,7 +468,12 @@ inline bool battleTurn(State& state, BattleAction action) {
       if (state.equipped[slot] < kCatalogSize) damage += static_cast<uint16_t>(itemPower(state.equipped[slot]) / 4u);
     }
     damage += state.combo * 2u;
-    state.combo = static_cast<uint8_t>(std::min<uint32_t>(5u, state.combo + 1u));
+    if (comboFinisherReady(state)) {
+      damage = static_cast<uint16_t>(std::min<uint32_t>(UINT16_MAX, uint32_t(damage) * 2u));
+      state.combo = 0;
+    } else {
+      state.combo = static_cast<uint8_t>(std::min<uint32_t>(5u, state.combo + 1u));
+    }
   } else if (action == BattleAction::Arcane) {
     if (state.mana >= 14u) {
       state.mana -= 14u;

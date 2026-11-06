@@ -75,6 +75,7 @@ class HomeActivity final : public Activity {
     return homemenu::item(homemenu::at(homemenu::config(), idx, hasOpdsUrl));
   }
   void onSelectBook(const std::string& path);
+  void removeCurrentRecentBook();
   void onFileBrowserOpen();
   void onLibraryOpen();
   void onSettingsOpen();

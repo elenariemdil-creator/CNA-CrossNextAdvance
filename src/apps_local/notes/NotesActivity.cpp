@@ -555,6 +555,52 @@ void NotesActivity::askRename() {
   });
 }
 
+void NotesActivity::askDuplicate() {
+  if (openName_ == notes::kFreeTasksName) return;
+  auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_NOTES_DUPLICATE),
+                                                           openName_ + " copy", kNameMax);
+  if (!keyboard) {
+    showNotice(tr(STR_UI_THERE_WAS_NOT_ENOUGH_MEMORY_TO_F5C32D));
+    return;
+  }
+  const std::string content = doc_;
+  const bool duplicateIsList = !openIsPage();
+  startActivityForResult(std::move(keyboard), [this, content, duplicateIsList](const ActivityResult& result) {
+    interactionsReady_ = false;
+    if (result.isCancelled) {
+      view_ = View::Note;
+      requestUpdate();
+      return;
+    }
+    const auto& entered = std::get<KeyboardResult>(result.data);
+    const std::string name = notes::Library::sanitise(entered.text);
+    if (name == notes::kFreeTasksName || !nameFitsBand(name)) {
+      showNotice(tr(STR_UI_THAT_NAME_IS_TOO_LONG_TO_9B14CC));
+      return;
+    }
+    std::string message;
+    if (!library_.create(name, message)) {
+      showNotice(message);
+      return;
+    }
+    if (!library_.save(name, content, message)) {
+      library_.remove(name);
+      showNotice(message);
+      return;
+    }
+    newIsList_ = duplicateIsList;
+    library_.scan();
+    rebuildRows();
+    for (int i = 0; i < library_.count(); ++i) {
+      if (library_.entries()[static_cast<size_t>(i)].name == name) {
+        openNote(i);
+        return;
+      }
+    }
+    openDeck();
+  });
+}
+
 void NotesActivity::askLine() {
   // THE COUNT IS THE RECEIPT. The keyboard reopens after each item so a list
   // can be written in one visit, and with a fixed title that read as OK doing
@@ -912,6 +958,9 @@ void NotesActivity::loop() {
       return;
     case notesui::ActionRename:
       askRename();
+      return;
+    case notesui::ActionDuplicate:
+      askDuplicate();
       return;
     case notesui::ActionUsePhone:
       startPhone();

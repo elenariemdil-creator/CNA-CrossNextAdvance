@@ -44,6 +44,7 @@ class LibraryListActivity final : public UiTabListActivity {
   const char* tabLabel(int index) const override;
   freeink::ui::TabIndicator tabIndicator(int index) const override;
   void onTabAction(int index) override;
+  void onTabLongPress(int index) override;
   void stepTab(int direction) override;
   bool handleCustomInput() override;
   bool handleButtons() override;
@@ -63,10 +64,11 @@ class LibraryListActivity final : public UiTabListActivity {
   static constexpr freeink::ui::ActionId ACTION_REBUILD = ACTION_SEARCH + 1;
   static constexpr freeink::ui::ActionId ACTION_BACK = ACTION_REBUILD + 1;
   static constexpr freeink::ui::ActionId ACTION_VIEW = ACTION_BACK + 1;
-  enum class View : uint8_t { Books, Settings, Categories, Facets };
+  enum class View : uint8_t { Books, Settings, Categories, Facets, CollectionPicker };
   View view = View::Books;
   View settingsReturn = View::Books;
   bool preferencesChanged = false;
+  int activeCollection = -1;
   freeink::ui::ListNav preferencesNav;
   freeink::ui::ListItem preferenceItems[int(libraryui::Preference::Count)]{};
   libraryui::Preferences preferences() const;
@@ -77,12 +79,18 @@ class LibraryListActivity final : public UiTabListActivity {
   void buildPreferences(UiScreen& screen);
   void buildFilterRows(UiScreen& screen);
   void showCategories();
+  void showCollections();
+  void selectCollection(int collection);
+  void createCollection(const std::string* addBookPath = nullptr);
+  void showCollectionChoices(const std::string& path, const std::string& title);
+  void showCollectionBookOptions(int entry);
+  void promptDeleteCollection(int collection);
   void chooseFacet(int row);
   bool resultMapped() const { return filtering() || libraryui::resultMapRequired(preferences()); }
   void openSortPicker();
   void openFilterMenu();
   void openFacetPicker(library::Facet facet);
-  bool filtering() const { return !query.empty() || facetFilter.active(); }
+  bool filtering() const { return !query.empty() || facetFilter.active() || activeCollection >= 0; }
   uint16_t facetOrdinal(int row) const;
   library::LibraryFilter facetFilter;
   HalMemory::PsramBuffer facetChoices;
@@ -107,6 +115,8 @@ class LibraryListActivity final : public UiTabListActivity {
   void resetAfterRebuild();
   // Recent-row long-press menu: open / remove from recents / delete / rebuild.
   void showRecentBookOptions(int entry);
+  // Flat or degraded book rows expose actions without changing grouped-row gestures.
+  void showBookOptions(int entry);
   void promptRemoveRecentBook(const std::string& path, const std::string& title);
   // Long-press delete owns the gesture where grouping does not apply: the
   // Recent sort, degraded lists, and any active search result.

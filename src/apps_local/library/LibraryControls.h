@@ -15,7 +15,8 @@ void filterTabs(Screen& screen, int active, fui::ActionId action, fui::ActionId 
   for (int n = 0; n < 2; ++n) {
     const auto tab = fui::makeRect(body.x + body.width * n / 2, body.y, body.width / 2, height);
     const int arrow = n == active ? 44 : 0;
-    screen.frame().hit(fui::makeRect(tab.x, tab.y, tab.width - arrow, tab.height), action, n, fui::InputTouch);
+    screen.frame().hit(fui::makeRect(tab.x, tab.y, tab.width - arrow, tab.height), action, n,
+               fui::InputTouch | fui::InputLongPress);
     if (!arrow) continue;
     const auto hit = fui::makeRect(tab.right() - arrow, tab.y, arrow, height);
     screen.frame().hit(hit, reverseAction, kReverseSort, fui::InputTouch);
@@ -132,10 +133,11 @@ void filterList(Screen& screen, fui::ListProps& props) {
 
 inline void preferenceRows(fui::ListProps& props, fui::ListItem* rows, Preferences p) {
   static constexpr StrId names[] = {StrId::STR_LIBRARY_METADATA,    StrId::STR_LIBRARY_LIST_VIEW,
-                                    StrId::STR_LIBRARY_RECENT_VIEW, StrId::STR_LIBRARY_SHOW_FINISHED,
-                                    StrId::STR_LIBRARY_SERIES,      StrId::STR_LIBRARY_GENRE,
-                                    StrId::STR_FORMAT_EPUB,         StrId::STR_FORMAT_XTC,
-                                    StrId::STR_FORMAT_TXT,          StrId::STR_FORMAT_MD};
+                                    StrId::STR_LIBRARY_RECENT_VIEW, StrId::STR_LIBRARY_RECENT_SHOW_ALL,
+                                    StrId::STR_LIBRARY_SHOW_FINISHED, StrId::STR_LIBRARY_SERIES,
+                                    StrId::STR_LIBRARY_GENRE,      StrId::STR_FORMAT_EPUB,
+                                    StrId::STR_FORMAT_XTC,         StrId::STR_FORMAT_TXT,
+                                    StrId::STR_FORMAT_MD};
   for (int n = 0; n < int(Preference::Count); ++n) {
     rows[n] = {};
     rows[n].label = I18N.get(names[n]);
@@ -143,13 +145,15 @@ inline void preferenceRows(fui::ListProps& props, fui::ListItem* rows, Preferenc
     rows[n].toggle = n != 1 && n != 2;
     if (n == 0)
       rows[n].toggleChecked = p.metadata;
-    else if (n >= 3)
-      rows[n].toggleChecked = n < 6 ? (p.display & (1 << (n - 3))) != 0 : (p.formats & (1 << (n - 6))) != 0;
+    else if (n == 3)
+      rows[n].toggleChecked = p.showAllRecent;
+    else if (n >= 4)
+      rows[n].toggleChecked = n < 7 ? (p.display & (1 << (n - 4))) != 0 : (p.formats & (1 << (n - 7))) != 0;
   }
   rows[1].value = p.expanded ? tr(STR_LIBRARY_EXPANDED) : tr(STR_LIBRARY_COMPACT);
   rows[2].value = p.grid ? tr(STR_LIBRARY_GRID_VIEW) : tr(STR_LIBRARY_LIST);
-  rows[3].sectionHeading = tr(STR_CAT_DISPLAY);
-  rows[6].sectionHeading = tr(STR_LIBRARY_SHOW_FILES);
+  rows[4].sectionHeading = tr(STR_CAT_DISPLAY);
+  rows[7].sectionHeading = tr(STR_LIBRARY_SHOW_FILES);
   props.items = rows;
   props.count = int(Preference::Count);
   pixelui::styleList(props, true);

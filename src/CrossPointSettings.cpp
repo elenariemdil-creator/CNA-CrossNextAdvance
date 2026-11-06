@@ -104,6 +104,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["librarySortMethod"] = librarySortMethod;
   doc["librarySortDirections"] = librarySortDirections;
   doc["libraryExpandedList"] = libraryExpandedList;
+  doc["libraryShowAllRecent"] = libraryShowAllRecent;
   doc["libraryDisplay"] = libraryDisplay;
   doc["libraryFileTypes"] = libraryFileTypes;
   doc["weekStartsSunday"] = weekStartsSunday;
@@ -307,6 +308,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   librarySortMethod = std::min(uint8_t(doc["librarySortMethod"] | 0), uint8_t(6));
   librarySortDirections = uint8_t(doc["librarySortDirections"] | 1) & 0x7f;
   libraryExpandedList = (doc["libraryExpandedList"] | 1) != 0;
+  libraryShowAllRecent = (doc["libraryShowAllRecent"] | 0) != 0;
   libraryDisplay = uint8_t(doc["libraryDisplay"] | 7) & 7;
   libraryFileTypes = uint8_t(doc["libraryFileTypes"] | 15) & 15;
   weekStartsSunday = (doc["weekStartsSunday"] | 0) == 1 ? 1 : 0;

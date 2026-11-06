@@ -21,6 +21,12 @@ The settings registry, JSON keys and existing actions are unchanged. Firmware
 identifies itself as CrossNext in About and on the boot screen; native S3 and
 simulator builds take their version from the fork section in platformio.ini.
 
+Display → Tap Power While Asleep to Cycle lets a short power-button tap advance
+the image in the Custom sleep wallpaper without opening Home. It is off by
+default and applies to images in `/.sleep` (or `/sleep`); a root `/sleep.bmp`
+is used only when neither folder supplies an image. Sleep image order can be
+Random or Ordered. A long press still follows the configured wake behavior.
+
 Appearance offers **Framed**, **Carousel**, **Carousel 2** and **Bookshelf**. Carousel 2 and
 Bookshelf use white headers throughout the interface. The retired experimental
 third layout migrates to Carousel only for settings without the current layout

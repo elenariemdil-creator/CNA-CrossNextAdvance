@@ -55,6 +55,7 @@ class NotesActivity final : public Activity {
   void asleepDeleted(const std::string& name);
   bool isShownAsleep() const;
   void askNewName();
+  void askDuplicate();
   // What the note being made is for. Only consulted while it is still empty;
   // the first line written settles the kind in the file itself.
   bool newIsList_ = true;

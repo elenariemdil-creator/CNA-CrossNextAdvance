@@ -42,7 +42,10 @@ int UiTabListActivity::ringPos() const {
 void UiTabListActivity::tabActionTrampoline(const fui::ActionEvent& event, void* user) {
   auto* self = static_cast<UiTabListActivity*>(user);
   if (event.value < 0 || event.value >= self->tabCount()) return;
-  self->onTabAction(event.value);
+  if (event.longPress)
+    self->onTabLongPress(event.value);
+  else
+    self->onTabAction(event.value);
 }
 
 void UiTabListActivity::onRowAction(const fui::ActionEvent& event) {
@@ -111,7 +114,7 @@ void UiTabListActivity::buildTabBar(UiScreen& screen) {
   tabProps.tabs = tabs;
   tabProps.count = static_cast<uint16_t>(count);
   tabProps.action = ACTION_TAB;
-  tabProps.inputMask = fui::InputTouch;
+  tabProps.inputMask = fui::InputTouch | fui::InputLongPress;
   // Pill shape and label size are theme-driven. Lyra uses equal-width slots
   // with small labels so wide text (e.g. "Controls") still fits at large UI scales.
   // Full-slot (RoundedRaff): the pill fills its slot like the legacy layout

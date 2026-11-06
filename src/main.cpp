@@ -685,6 +685,10 @@ void setup() {
     SETTINGS.readerMenuStyle = CrossPointSettings::READER_MENU_TOOLBAR;
   }
   SETTINGS.loadFromFile();
+  const bool cycleSleepScreenWake =
+      isPersistedSleepWake && SETTINGS.cycleSleepScreen &&
+      SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM &&
+      gpio.getPowerButtonHeldTime() <= X4PRO_POWER_CLICK_MAX_HOLD_MS;
   // After checkPanic() so the panic record is still there to read, and after
   // the settings so the toggle is known; reads one card file, never the radio.
   // Upstream moved SETTINGS.loadFromFile()
@@ -741,6 +745,7 @@ void setup() {
 #else
   (void)startedUnattended;
 #endif
+  if (cycleSleepScreenWake) bootKind = wakepolicy::Boot::Unattended;
   Frontlight.begin(SETTINGS.frontlightBrightness, SETTINGS.frontlightWarmth, /*on=*/false);
 
   switch (wakeupReason) {
@@ -754,7 +759,8 @@ void setup() {
       LOG_DBG("MAIN", "Dev bridge build: skipping power button verification");
       break;
 #else
-      if (!powermenu::acceptsWake(static_cast<powermenu::WakeMode>(SETTINGS.powerWakeMode), wakeHoldVerified)) {
+      if (!cycleSleepScreenWake &&
+          !powermenu::acceptsWake(static_cast<powermenu::WakeMode>(SETTINGS.powerWakeMode), wakeHoldVerified)) {
         LOG_DBG("MAIN", "Power-button wake not held through verification, sleeping");
         powerprobe::beforeSleep();
         Storage.prepareForDeepSleep();
@@ -819,7 +825,9 @@ void setup() {
   // screen and nothing beyond that: no splash, no home screen, no book.
   //
   if (!wakepolicy::presentsUi(bootKind)) {
-    LOG_INF("MAIN", "Unattended wake: repainting the sleep screen and going straight back down");
+    APP_STATE.cycleSleepImageRequested = cycleSleepScreenWake;
+    LOG_INF("MAIN", cycleSleepScreenWake ? "Power tap: cycling sleep screen and returning to sleep"
+                                         : "Unattended wake: repainting the sleep screen and going straight back down");
     setupDisplayAndFonts(/*seamless=*/true);
     enterDeepSleep(/*fromTimeout=*/false, /*unattended=*/true);
     return;  // startDeepSleepArmed() does not return; this is for the reader

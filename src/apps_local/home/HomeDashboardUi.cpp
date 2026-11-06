@@ -215,12 +215,13 @@ bool HomeDashboardUi::repaintSelection(int selected) {
 
 void HomeDashboardUi::onAction(const fui::ActionEvent& event, void* user) {
   auto& self = *static_cast<HomeDashboardUi*>(user);
-  self.pending = event.value;
+  self.pending = event.longPress ? homeui::kRemoveBook : event.value;
   self.app.clearTapFlash();
 }
 
 int HomeDashboardUi::selectedAction(const MappedInputManager& input) {
   pending = -1;
-  const auto touch = routeTouch(input);
+  const auto touch = routeTouch(input, true);
+  if (touch.event.longPress) return pending;
   return touch.snap.touchReleased ? pending : -1;
 }

@@ -35,6 +35,8 @@ class UiTabListActivity : public UiListActivity {
   virtual freeink::ui::TabIndicator tabIndicator(int) const { return freeink::ui::TabIndicator::None; }
   // Touch tap on a tab pill (bounds already checked).
   virtual void onTabAction(int index) = 0;
+  // Touch long-press on a tab pill (bounds already checked).
+  virtual void onTabLongPress(int) {}
   // Advance the active tab by direction (continuous-hold navigation; also what
   // Confirm on the tab bar should do). Subclass owns wrap and any per-switch
   // state reset, and requests the update.

@@ -14,6 +14,7 @@ enum class Preference : uint8_t {
   Metadata,
   ListView,
   RecentView,
+  ShowAllRecent,
   Finished,
   Series,
   Genre,
@@ -25,7 +26,7 @@ enum class Preference : uint8_t {
 };
 inline constexpr uint8_t kFinished = 1, kSeries = 2, kGenre = 4, kAllFormats = 15;
 struct Preferences {
-  bool metadata = true, expanded = true, grid = false;
+  bool metadata = true, expanded = true, grid = false, showAllRecent = false;
   uint8_t display = 7, formats = kAllFormats;
   bool operator==(const Preferences&) const = default;
 };

@@ -8,6 +8,7 @@
 
 #include "activities/Activity.h"
 #include "apps_local/words/VocabularyStorage.h"
+#include "apps_local/words/DictionaryPickerActivity.h"
 #include "util/Dictionary.h"
 
 // Controller for dictionary lookup: renders the background page, runs the
@@ -55,6 +56,7 @@ class DictionaryWordSelectActivity final : public Activity {
   bool dictOpenAttempted = false;
   bool dictOpenOk = false;
   bool dictNeedsIndex = false;
+  std::string lookupDictionary;
 
   Popup popup = Popup::None;
   StrId popupMsg = StrId::STR_DICT_NOT_FOUND;

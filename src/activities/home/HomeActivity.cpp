@@ -413,6 +413,12 @@ void HomeActivity::loop() {
     requestUpdate();
   }
 
+  if (!coverGridUi && selectorIndex == 0 && !recentBooks.empty() &&
+      mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, 650)) {
+    removeCurrentRecentBook();
+    return;
+  }
+
   auto activateSelection = [this] {
     if (selectorIndex < displayBookCount()) {
       onSelectBook(recentBooks[selectorIndex].path);
@@ -552,6 +558,10 @@ void HomeActivity::loop() {
     }
     return;
   }
+  if (touched == homeui::kRemoveBook && !recentBooks.empty()) {
+    removeCurrentRecentBook();
+    return;
+  }
   if (touched >= 0 && touched < menuCount) {
     selectorIndex = touched;
     activateSelection();
@@ -647,6 +657,20 @@ void HomeActivity::render(RenderLock&&) {
 }
 
 void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path); }
+
+void HomeActivity::removeCurrentRecentBook() {
+  if (recentBooks.empty()) return;
+  const std::string path = recentBooks.front().path;
+  if (!RECENT_BOOKS.removeByPath(path)) return;
+  recentBookIndex = 0;
+  loadRecentBooks(1);
+  hasContinueReading = !recentBooks.empty();
+  selectorIndex = 0;
+  freeCoverBuffer();
+  recentsLoaded = false;
+  dashboardDirty = true;
+  requestUpdate();
+}
 
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
 

@@ -16,6 +16,7 @@
 #include <Xtc.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -26,6 +27,7 @@
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "apps_local/library/LibraryFinishedBooks.h"
+#include "apps_local/library/LibraryCollectionsStore.h"
 #include "apps_local/ui/PageIndicator.h"
 #include "apps_local/ui/PixelMenuTheme.h"
 #include "components/UIScale.h"
@@ -81,6 +83,7 @@ void LibraryListActivity::onEnter() {
   // needs the card to itself.
   RenderLock lock(*this);
   activeTabIndex = 0;
+  activeCollection = -1;
   descendingTabs = SETTINGS.librarySortDirections & 1u;
   sortOrder = descendingTabs & 1 ? library::SortOrder::RecentDesc : library::SortOrder::RecentAsc;
   UiTabListActivity::onEnter();
@@ -189,7 +192,7 @@ int LibraryListActivity::selectedEntry() const {
 
 // Recently opened retains store rows even when the card index omitted them.
 int LibraryListActivity::pinnedCount() const {
-  if (activeTabIndex != RECENT_TAB || resultMapped()) return 0;
+  if (activeTabIndex != RECENT_TAB || resultMapped() || SETTINGS.libraryShowAllRecent) return 0;
   return pinnedTotal;
 }
 
@@ -281,11 +284,25 @@ void LibraryListActivity::openBookByPath(const std::string& path) {
 }
 
 void LibraryListActivity::activateIndex(const int index) {
+  if (view == View::CollectionPicker) {
+    const int count = static_cast<int>(libraryui::CollectionsStore::getInstance().collections().size());
+    if (index == count && count < static_cast<int>(libraryui::CollectionsStore::MAX_COLLECTIONS)) {
+      createCollection();
+    } else if (index >= 0 && index < count) {
+      selectCollection(index);
+    }
+    return;
+  }
   if (view == View::Categories) {
     static constexpr library::Facet facets[] = {library::Facet::Genre, library::Facet::Series,
                                                 library::Facet::AuthorFirst, library::Facet::Author,
                                                 library::Facet::TitleInitial};
-    if (index >= 0 && index < 5) openFacetPicker(facets[descendingTabs & 2 ? 4 - index : index]);
+    const int category = descendingTabs & 2 ? 5 - index : index;
+    if (category == 5) {
+      showCollections();
+    } else if (category >= 0 && category < 5) {
+      openFacetPicker(facets[category]);
+    }
     return;
   }
   if (view == View::Facets) {
@@ -310,11 +327,18 @@ void LibraryListActivity::activateIndex(const int index) {
 bool LibraryListActivity::deleteEligible() const { return !groupsCollapsed && (filtering() || !groupable()); }
 
 void LibraryListActivity::onRowLongPress(const int index) {
+  if (view == View::CollectionPicker) {
+    const int count = static_cast<int>(libraryui::CollectionsStore::getInstance().collections().size());
+    if (index >= 0 && index < count) promptDeleteCollection(index);
+    return;
+  }
   if (view != View::Books) return;
-  if (isRecentSort(sortOrder)) {
+  if (activeCollection >= 0) {
+    showCollectionBookOptions(index);
+  } else if (isRecentSort(sortOrder)) {
     showRecentBookOptions(index);
   } else if (deleteEligible()) {
-    promptDeleteBook(index);
+    showBookOptions(index);
   } else if (!groupsCollapsed && groupable()) {
     collapseGroups(index);
   } else {
@@ -348,12 +372,25 @@ void LibraryListActivity::showRecentBookOptions(const int entry) {
     }
   }
 
-  const char* STORE_OPTIONS[] = {tr(STR_OPEN), tr(STR_REMOVE_FROM_RECENTS), tr(STR_DELETE), tr(STR_LIBRARY_REBUILD)};
-  const char* INDEX_OPTIONS[] = {tr(STR_OPEN), tr(STR_DELETE), tr(STR_LIBRARY_REBUILD)};
+  std::vector<std::string> options;
+  if (isStoreRow) {
+    options = {tr(STR_OPEN), tr(STR_REMOVE_FROM_RECENTS), tr(STR_DELETE), tr(STR_LIBRARY_REBUILD)};
+  } else {
+    options = {tr(STR_OPEN), tr(STR_DELETE), tr(STR_LIBRARY_REBUILD)};
+  }
+  const int addToCollection = static_cast<int>(options.size());
+  options.emplace_back(tr(STR_LIBRARY_ADD_TO_COLLECTION));
+  std::vector<const char*> labels;
+  labels.reserve(options.size());
+  for (const auto& option : options) labels.push_back(option.c_str());
   app.clearTapFlash();
-  optionPopup.show(tr(STR_LIBRARY), title.c_str(), isStoreRow ? STORE_OPTIONS : INDEX_OPTIONS, isStoreRow ? 4 : 3, 0,
-                   [this, path, title, isStoreRow](const int choice) {
+  optionPopup.show(tr(STR_LIBRARY), title.c_str(), labels.data(), static_cast<int>(labels.size()), 0,
+                   [this, path, title, isStoreRow, addToCollection](const int choice) {
                      swallowHeldReleases();
+                     if (choice == addToCollection) {
+                       showCollectionChoices(path, title);
+                       return;
+                     }
                      switch (choice) {
                        case 0:
                          openBookByPath(path);
@@ -373,6 +410,48 @@ void LibraryListActivity::showRecentBookOptions(const int entry) {
                          break;
                        case 3:
                          if (isStoreRow) promptRebuildIndex();
+                         break;
+                       default:
+                         break;
+                     }
+                   });
+  requestUpdate();
+}
+
+void LibraryListActivity::showBookOptions(const int entry) {
+  RenderLock lock;
+  if (entry < 0 || entry >= listCount() || !index.isOpen()) return;
+
+  const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
+  library::ClixRecord record{};
+  std::string path;
+  std::string title, author;
+  if (ordinal == 0xFFFF || !index.readRecord(ordinal, record) || !index.readPath(record, path) ||
+      !rowTextFor(entry, title, author)) {
+    LOG_ERR("LIB", "cannot resolve book row %d", entry);
+    return;
+  }
+
+  std::vector<std::string> options = {tr(STR_OPEN), tr(STR_LIBRARY_ADD_TO_COLLECTION), tr(STR_DELETE),
+                                      tr(STR_LIBRARY_REBUILD)};
+  std::vector<const char*> labels;
+  labels.reserve(options.size());
+  for (const auto& option : options) labels.push_back(option.c_str());
+  optionPopup.show(tr(STR_LIBRARY), title.c_str(), labels.data(), static_cast<int>(labels.size()), 0,
+                   [this, path, title](const int choice) {
+                     swallowHeldReleases();
+                     switch (choice) {
+                       case 0:
+                         openBookByPath(path);
+                         break;
+                       case 1:
+                         showCollectionChoices(path, title);
+                         break;
+                       case 2:
+                         promptDeleteBookByPath(path, title);
+                         break;
+                       case 3:
+                         promptRebuildIndex();
                          break;
                        default:
                          break;
@@ -536,7 +615,7 @@ void LibraryListActivity::openSearch() {
 
 libraryui::Preferences LibraryListActivity::preferences() const {
   return {SETTINGS.libraryUseMetadata != 0, expandedListSetting() != 0, recentViewSetting() == 1,
-          SETTINGS.libraryDisplay, SETTINGS.libraryFileTypes};
+          SETTINGS.libraryShowAllRecent != 0, SETTINGS.libraryDisplay, SETTINGS.libraryFileTypes};
 }
 fui::ListNav& LibraryListActivity::activeNav() {
   return view != View::Books ? preferencesNav : UiTabListActivity::activeNav();
@@ -555,6 +634,7 @@ void LibraryListActivity::savePreferences(libraryui::Preferences value) {
     SETTINGS.libraryUseMetadata = p.metadata;
     expandedListSetting() = p.expanded;
     recentViewSetting() = p.grid;
+    SETTINGS.libraryShowAllRecent = p.showAllRecent;
     SETTINGS.libraryDisplay = p.display;
     SETTINGS.libraryFileTypes = p.formats;
   };
@@ -616,6 +696,9 @@ void LibraryListActivity::activatePreference(int row) {
   switch (preference) {
     case libraryui::Preference::Metadata:
       value.metadata = !value.metadata;
+      break;
+    case libraryui::Preference::ShowAllRecent:
+      value.showAllRecent = !value.showAllRecent;
       break;
     case libraryui::Preference::ListView:
     case libraryui::Preference::RecentView: {
@@ -685,6 +768,25 @@ void LibraryListActivity::onTabAction(const int index) {
   selectTab(index, true);
 }
 
+void LibraryListActivity::onTabLongPress(const int index) {
+  if (index != RECENT_TAB || view != View::Books) return;
+  const char* options[] = {I18N.get(SETTINGS.libraryShowAllRecent ? StrId::STR_LIBRARY_RECENT_SHOW_ONLY
+                                                                 : StrId::STR_LIBRARY_RECENT_SHOW_ALL)};
+  optionPopup.show(tr(STR_LIBRARY_TAB_RECENT), options, 1, 0, [this](const int choice) {
+    swallowHeldReleases();
+    if (choice != 0) return;
+    auto value = preferences();
+    value.showAllRecent = !value.showAllRecent;
+    savePreferences(value);
+    RenderLock lock;
+    applyFilter();
+    activeNav().reset();
+    resetUi();
+    requestUpdate();
+  });
+  requestUpdate();
+}
+
 void LibraryListActivity::selectTab(const int index, const bool) {
   if (index < 0 || index > 1) return;
   if (index == 1) {
@@ -695,6 +797,7 @@ void LibraryListActivity::selectTab(const int index, const bool) {
   closeRouting();
   view = View::Books;
   activeTabIndex = 0;
+  activeCollection = -1;
   sortOrder = descendingTabs & 1 ? library::SortOrder::RecentDesc : library::SortOrder::RecentAsc;
   facetChoices.reset();
   facetFilter = {};
@@ -784,10 +887,175 @@ void LibraryListActivity::showCategories() {
   activeTabIndex = 1;
   headerSearchTitle.clear();
   view = View::Categories;
+  activeCollection = -1;
   facetChoices.reset();
   preferencesNav.reset();
   resetUi();
   requestUpdate();
+}
+
+void LibraryListActivity::showCollections() {
+  libraryui::CollectionsStore::getInstance();
+  RenderLock lock;
+  closeRouting();
+  activeTabIndex = 1;
+  headerSearchTitle.clear();
+  view = View::CollectionPicker;
+  activeCollection = -1;
+  facetChoices.reset();
+  preferencesNav.reset();
+  resetUi();
+  requestUpdate();
+}
+
+void LibraryListActivity::selectCollection(const int collection) {
+  auto& store = libraryui::CollectionsStore::getInstance();
+  if (collection < 0 || collection >= static_cast<int>(store.collections().size())) return;
+  RenderLock lock;
+  closeRouting();
+  activeCollection = collection;
+  activeTabIndex = 1;
+  view = View::Books;
+  query.clear();
+  headerSearchTitle.clear();
+  facetFilter = {};
+  sortOrder = descendingTabs & 2 ? library::SortOrder::TitleDesc : library::SortOrder::TitleAsc;
+  applyFilter();
+  activeNav().reset();
+  requestUpdate();
+}
+
+void LibraryListActivity::createCollection(const std::string* addBookPath) {
+  const std::string path = addBookPath ? *addBookPath : std::string();
+  auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_LIBRARY_NEW_COLLECTION), "",
+                                                           libraryui::CollectionsStore::MAX_NAME_BYTES);
+  if (!keyboard) {
+    LOG_ERR("LIB", "OOM: collection name keyboard");
+    return;
+  }
+  startActivityForResult(std::move(keyboard), [this, path](const ActivityResult& result) {
+    swallowHeldReleases();
+    if (result.isCancelled) return;
+    std::string name = std::get<KeyboardResult>(result.data).text;
+    while (!name.empty() && std::isspace(static_cast<unsigned char>(name.front()))) name.erase(name.begin());
+    while (!name.empty() && std::isspace(static_cast<unsigned char>(name.back()))) name.pop_back();
+    auto& store = libraryui::CollectionsStore::getInstance();
+    if (!store.create(name)) {
+      LOG_ERR("LIB", "cannot create collection");
+      const char* ok[] = {tr(STR_OK_BUTTON)};
+      optionPopup.showMessage(tr(STR_LIBRARY), tr(STR_LIBRARY_COLLECTION_SAVE_FAILED), ok, 1, 0,
+                              [this](int) { requestUpdate(); });
+      requestUpdate();
+      return;
+    }
+    const int created = static_cast<int>(store.collections().size()) - 1;
+    if (!path.empty() &&
+        !store.addBook(static_cast<size_t>(created), library::clixPathHash(path.data(), path.size()))) {
+      LOG_ERR("LIB", "cannot add book to new collection");
+      const char* ok[] = {tr(STR_OK_BUTTON)};
+      optionPopup.showMessage(tr(STR_LIBRARY), tr(STR_LIBRARY_COLLECTION_SAVE_FAILED), ok, 1, 0,
+                              [this](int) { requestUpdate(); });
+      requestUpdate();
+      return;
+    }
+    if (path.empty())
+      selectCollection(created);
+    else
+      requestUpdate();
+  });
+}
+
+void LibraryListActivity::showCollectionChoices(const std::string& path, const std::string& title) {
+  auto& store = libraryui::CollectionsStore::getInstance();
+  const auto& collections = store.collections();
+  std::vector<std::string> options;
+  options.reserve(collections.size() + 1);
+  for (const auto& collection : collections) options.push_back(collection.name);
+  if (collections.size() < libraryui::CollectionsStore::MAX_COLLECTIONS)
+    options.emplace_back(tr(STR_LIBRARY_NEW_COLLECTION));
+  optionPopup.show(StrId::STR_LIBRARY_ADD_TO_COLLECTION, options, -1, [this, path, title](const int choice) {
+    swallowHeldReleases();
+    auto& current = libraryui::CollectionsStore::getInstance();
+    const int count = static_cast<int>(current.collections().size());
+    if (choice == count && count < static_cast<int>(libraryui::CollectionsStore::MAX_COLLECTIONS)) {
+      createCollection(&path);
+      return;
+    }
+    if (choice < 0 || choice >= count) return;
+    if (!current.addBook(static_cast<size_t>(choice), library::clixPathHash(path.data(), path.size()))) {
+      LOG_ERR("LIB", "cannot add book to collection");
+      const char* ok[] = {tr(STR_OK_BUTTON)};
+      optionPopup.showMessage(tr(STR_LIBRARY), tr(STR_LIBRARY_COLLECTION_SAVE_FAILED), ok, 1, 0,
+                              [this](int) { requestUpdate(); });
+    } else {
+      LOG_DBG("LIB", "added %s to collection %s", title.c_str(), current.collections()[choice].name.c_str());
+    }
+    requestUpdate();
+  });
+  requestUpdate();
+}
+
+void LibraryListActivity::showCollectionBookOptions(const int entry) {
+  RenderLock lock;
+  if (entry < 0 || entry >= bookRowCount() || !index.isOpen()) return;
+  const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
+  library::ClixRecord record{};
+  std::string path;
+  std::string title, author;
+  uint64_t pathHash = 0;
+  if (ordinal == 0xFFFF || !index.readRecord(ordinal, record) || !index.readPath(record, path) ||
+      !index.readPathHash(record, pathHash) || !rowTextFor(entry, title, author)) {
+    LOG_ERR("LIB", "cannot resolve collection book row %d", entry);
+    return;
+  }
+  const char* options[] = {tr(STR_OPEN), tr(STR_LIBRARY_REMOVE_FROM_COLLECTION)};
+  optionPopup.show(tr(STR_LIBRARY), title.c_str(), options, 2, 0, [this, path, pathHash](const int choice) {
+    swallowHeldReleases();
+    if (choice == 0) {
+      openBookByPath(path);
+      return;
+    }
+    if (choice != 1 || activeCollection < 0) return;
+    auto& store = libraryui::CollectionsStore::getInstance();
+    if (!store.removeBook(static_cast<size_t>(activeCollection), pathHash)) {
+      LOG_ERR("LIB", "cannot remove book from collection");
+      const char* ok[] = {tr(STR_OK_BUTTON)};
+      optionPopup.showMessage(tr(STR_LIBRARY), tr(STR_LIBRARY_COLLECTION_SAVE_FAILED), ok, 1, 0,
+                              [this](int) { requestUpdate(); });
+      requestUpdate();
+      return;
+    }
+    applyFilter();
+    activeNav().reset();
+    requestUpdate();
+  });
+  requestUpdate();
+}
+
+void LibraryListActivity::promptDeleteCollection(const int collection) {
+  auto& store = libraryui::CollectionsStore::getInstance();
+  if (collection < 0 || collection >= static_cast<int>(store.collections().size())) return;
+  const std::string name = store.collections()[collection].name;
+  auto confirmation =
+      makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_DELETE) + std::string("? "), name);
+  if (!confirmation) {
+    LOG_ERR("LIB", "OOM: collection delete confirmation");
+    return;
+  }
+  startActivityForResult(std::move(confirmation), [this, collection](const ActivityResult& result) {
+    swallowHeldReleases();
+    if (!result.isCancelled) {
+      if (!libraryui::CollectionsStore::getInstance().remove(static_cast<size_t>(collection))) {
+        LOG_ERR("LIB", "cannot delete collection");
+        const char* ok[] = {tr(STR_OK_BUTTON)};
+        optionPopup.showMessage(tr(STR_LIBRARY), tr(STR_LIBRARY_COLLECTION_SAVE_FAILED), ok, 1, 0,
+                                [this](int) { requestUpdate(); });
+      } else {
+        preferencesNav.reset();
+      }
+    }
+    requestUpdate();
+  });
 }
 
 void LibraryListActivity::chooseFacet(int row) {
@@ -796,6 +1064,7 @@ void LibraryListActivity::chooseFacet(int row) {
   std::string value;
   if (!index.readRecord(facetOrdinal(row), record) || !library::readFacet(index, record, facetKind, value)) return;
   facetFilter = {};
+  activeCollection = -1;
   auto& selected = facetFilter.forFacet(facetKind);
   selected.value = std::move(value);
   selected.enabled = true;
@@ -815,7 +1084,7 @@ void LibraryListActivity::chooseFacet(int row) {
 void LibraryListActivity::buildFilterRows(UiScreen& screen) {
   static constexpr StrId categories[] = {StrId::STR_LIBRARY_GENRE, StrId::STR_LIBRARY_SERIES,
                                          StrId::STR_LIBRARY_AUTHOR_FIRST, StrId::STR_LIBRARY_AUTHOR_LAST,
-                                         StrId::STR_LIBRARY_FIRST_LETTER};
+                                         StrId::STR_LIBRARY_FIRST_LETTER, StrId::STR_LIBRARY_COLLECTIONS};
   if (view == View::Facets) {
     const int category = facetKind == library::Facet::Genre         ? 0
                          : facetKind == library::Facet::Series      ? 1
@@ -831,7 +1100,7 @@ void LibraryListActivity::buildFilterRows(UiScreen& screen) {
   libraryui::filterCards(props, screen.target());
   props.count = listCount();
   props.action = ACTION_ROW;
-  props.inputMask = fui::InputTouch;
+  props.inputMask = view == View::CollectionPicker ? fui::InputTouch | fui::InputLongPress : fui::InputTouch;
   props.selectedIndex = -1;
   syncListViewport(screen, props);
   props.selectedIndex = -1;
@@ -842,9 +1111,13 @@ void LibraryListActivity::buildFilterRows(UiScreen& screen) {
     item = {};
     item.actionValue = first + n;
     item.value = ">";
-    if (view == View::Categories)
-      item.label = I18N.get(categories[descendingTabs & 2 ? 4 - first - n : first + n]);
-    else {
+    if (view == View::Categories) {
+      item.label = I18N.get(categories[descendingTabs & 2 ? 5 - first - n : first + n]);
+    } else if (view == View::CollectionPicker) {
+      const auto& collections = libraryui::CollectionsStore::getInstance().collections();
+      item.label = first + n == static_cast<int>(collections.size()) ? tr(STR_LIBRARY_NEW_COLLECTION)
+                                                                     : collections[first + n].name.c_str();
+    } else {
       library::ClixRecord record{};
       auto& name = facetNames[n];
       if (!index.readRecord(facetOrdinal(first + n), record) || !library::readFacet(index, record, facetKind, name))
@@ -896,16 +1169,19 @@ fui::TabIndicator LibraryListActivity::tabIndicator(const int) const { return fu
 
 int LibraryListActivity::bookRowCount() const {
   if (resultMapped()) return int(filteredCount);
-  if (isRecentSort(sortOrder)) return pinnedCount();
+  if (isRecentSort(sortOrder) && !SETTINGS.libraryShowAllRecent) return pinnedCount();
   return static_cast<int>(index.bookCount());
 }
 
 int LibraryListActivity::listCount() const {
-  return view == View::Categories ? 5
-         : view == View::Facets   ? facetCount
-         : view == View::Settings ? int(libraryui::Preference::Count)
-         : groupsCollapsed        ? static_cast<int>(groupCount)
-                                  : bookRowCount();
+  if (view == View::Categories) return 6;
+  if (view == View::CollectionPicker) {
+    const size_t count = libraryui::CollectionsStore::getInstance().collections().size();
+    return static_cast<int>(count + (count < libraryui::CollectionsStore::MAX_COLLECTIONS ? 1 : 0));
+  }
+  if (view == View::Facets) return facetCount;
+  if (view == View::Settings) return int(libraryui::Preference::Count);
+  return groupsCollapsed ? static_cast<int>(groupCount) : bookRowCount();
 }
 
 // Store rows resolve through storeIndexFor(); other entries name index positions.
@@ -917,7 +1193,9 @@ int LibraryListActivity::rowFor(const int entry) const {
   return entry;
 }
 
-bool LibraryListActivity::groupable() const { return !degraded && isGroupedOrder(sortOrder) && bookRowCount() > 0; }
+bool LibraryListActivity::groupable() const {
+  return activeCollection < 0 && !degraded && isGroupedOrder(sortOrder) && bookRowCount() > 0;
+}
 
 uint32_t LibraryListActivity::titleInitialFor(const int entry) {
   const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
@@ -1027,7 +1305,8 @@ void LibraryListActivity::applyFilter() {
 
   const std::string needle = library::fold(query);
   const int total = static_cast<int>(index.bookCount());
-  const int capacity = isRecentSort(sortOrder) ? pinnedTotal : total;
+  const bool recentOnly = isRecentSort(sortOrder) && !SETTINGS.libraryShowAllRecent;
+  const int capacity = recentOnly ? pinnedTotal : total;
   if (capacity <= 0) return;
 
   auto matches = makeUniqueNoThrow<uint16_t[]>(static_cast<size_t>(capacity));
@@ -1060,7 +1339,7 @@ void LibraryListActivity::applyFilter() {
   }
   HalMemory::PsramBuffer folders;
   const size_t folderCount = index.header().folderCount;
-  if (finished && !isRecentSort(sortOrder)) {
+  if (finished && !recentOnly) {
     if (folderCount > library::CLIX_MAX_RECORDS ||
         !(folders = HalMemory::allocatePsram(folderCount * sizeof(uint32_t))) ||
         !index.readFolderOffsets(reinterpret_cast<uint32_t*>(folders.get()), folderCount, [] { delay(1); })) {
@@ -1079,6 +1358,15 @@ void LibraryListActivity::applyFilter() {
     if (!index.readName(record, author)) {
       filterFailed = true;
       return;
+    }
+    if (activeCollection >= 0) {
+      uint64_t pathHash = 0;
+      if (!index.readPathHash(record, pathHash)) {
+        filterFailed = true;
+        return;
+      }
+      if (!libraryui::CollectionsStore::getInstance().contains(static_cast<size_t>(activeCollection), pathHash))
+        return;
     }
     if (!libraryui::acceptsFormat(author, SETTINGS.libraryFileTypes)) return;
     if (finished) {
@@ -1108,7 +1396,7 @@ void LibraryListActivity::applyFilter() {
       matches[matchCount++] = static_cast<uint16_t>(row);
     filterFailed |= index.ioFailed();
   };
-  if (isRecentSort(sortOrder)) {
+  if (recentOnly) {
     const auto& books = RECENT_BOOKS.getBooks();
     for (int position = 0; position < pinnedTotal && !filterFailed; ++position) {
       const int at = isDescending(sortOrder) ? position : pinnedTotal - 1 - position;
@@ -1174,12 +1462,16 @@ void LibraryListActivity::handleBackAction() {
     selectTab(0, false);
     return;
   }
+  if (view == View::CollectionPicker) {
+    showCategories();
+    return;
+  }
   if (facetFilter.active()) {
     openFacetPicker(facetKind);
     return;
   }
   auto& nav = activeNav();
-  if (filtering()) {
+  if (!query.empty() || facetFilter.active()) {
     RenderLock lock;
     query.clear();
     facetFilter = {};
@@ -1187,6 +1479,8 @@ void LibraryListActivity::handleBackAction() {
     nav.selected = 0;
     nav.top = 0;
     requestUpdate();
+  } else if (activeCollection >= 0) {
+    showCollections();
   } else if (groupsCollapsed) {
     restoreExpandedList();
   } else if (!tabsFocused() && !degraded) {
@@ -1746,7 +2040,7 @@ void LibraryListActivity::buildScreen(UiScreen& screen) {
 
   libraryui::filterTabs(screen, activeTabIndex, ACTION_TAB, ACTION_VIEW,
                         activeTabIndex == 0 ? isDescending(sortOrder) : bool(descendingTabs & 2));
-  if (view == View::Categories || view == View::Facets) {
+  if (view == View::Categories || view == View::Facets || view == View::CollectionPicker) {
     buildFilterRows(screen);
     return;
   }
@@ -1808,17 +2102,22 @@ void LibraryListActivity::drawPositionReadout() const {
 
 const char* LibraryListActivity::headerTitle() const {
   if (view == View::Settings) return tr(STR_LIBRARY_SETTINGS);
+  if (view == View::CollectionPicker) return tr(STR_LIBRARY_COLLECTIONS);
   if (!headerSearchTitle.empty()) return headerSearchTitle.c_str();
+  if (activeCollection >= 0) {
+    const auto& collections = libraryui::CollectionsStore::getInstance().collections();
+    if (activeCollection < static_cast<int>(collections.size())) return collections[activeCollection].name.c_str();
+  }
   return degraded ? tr(STR_LIBRARY_TITLE_UNSORTED) : tr(STR_LIBRARY);
 }
 
 void LibraryListActivity::drawHoldHelp() const {
   if (mappedInput.hasTouch() || groupsCollapsed || view != View::Books) return;
   const char* help = nullptr;
-  if (!tabsFocused() && isRecentSort(sortOrder) && listCount() > 0)
+  if (!tabsFocused() && (activeCollection >= 0 || isRecentSort(sortOrder)) && listCount() > 0)
     help = tr(STR_LIBRARY_HOLD_OPTIONS);  // recent rows: hold opens the row menu
   else if (!tabsFocused() && deleteEligible() && listCount() > 0)
-    help = tr(STR_HOLD_OPEN_TO_DELETE);
+    help = tr(STR_LIBRARY_HOLD_OPTIONS);
   else if (!tabsFocused() && groupable())
     help = tr(STR_LIBRARY_HOLD_GROUPS);
   if (!help) return;

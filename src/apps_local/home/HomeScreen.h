@@ -56,7 +56,7 @@ void drawMenuSelection(fui::DrawTarget& target, Model& model, const Layout& layo
 void drawCardSelection(fui::DrawTarget& target, const Model& model, const Layout& layout);
 
 constexpr fui::ActionId kSelect = 1;
-constexpr int kPreviousBook = -2, kNextBook = -3;
+constexpr int kPreviousBook = -2, kNextBook = -3, kRemoveBook = -5;
 enum class QuickAction : int16_t {
   Settings = -4,
   Files = -10,
@@ -87,7 +87,7 @@ void build(Screen& screen, const Model& model, const Layout& geometry, fui::Butt
   if (model.style == Style::Boox) {
     screen.frame().hit(geometry.settingsButton, kSelect, int(QuickAction::Settings), fui::InputTouch);
     if (model.hasBook) {
-      screen.frame().hit(geometry.cover, kSelect, 0, fui::InputTouch);
+      screen.frame().hit(geometry.cover, kSelect, 0, fui::InputTouch | fui::InputLongPress);
       if (model.canPrevious) screen.frame().hit(geometry.sides[1], kSelect, kPreviousBook, fui::InputTouch);
       if (model.canNext) screen.frame().hit(geometry.sides[2], kSelect, kNextBook, fui::InputTouch);
     }
@@ -115,7 +115,7 @@ void build(Screen& screen, const Model& model, const Layout& geometry, fui::Butt
       const auto below = fui::makeRect(card.x, art.bottom(), card.width, card.bottom() - art.bottom());
       if (!above.empty()) screen.frame().hit(above, kSelect, 0, fui::InputTouch);
       if (!below.empty()) screen.frame().hit(below, kSelect, 0, fui::InputTouch);
-      screen.frame().hit(geometry.cover, kSelect, 0, fui::InputTouch);
+      screen.frame().hit(geometry.cover, kSelect, 0, fui::InputTouch | fui::InputLongPress);
       if (model.canPrevious)
         screen.frame().hit(fui::makeRect(art.x, art.y, geometry.cover.x - art.x, art.height), kSelect, kPreviousBook,
                            fui::InputTouch);

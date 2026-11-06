@@ -130,9 +130,11 @@ void DungeonCrawlActivity::loop() {
     if (event.action >= ActionBattleAttack && event.action <= ActionBattleEscape) {
       dungeoncrawl::beginEncounter(state);
       const auto action = static_cast<dungeoncrawl::BattleAction>(event.action - ActionBattleAttack);
+      const bool finisher = action == dungeoncrawl::BattleAction::Attack && dungeoncrawl::comboFinisherReady(state);
       const bool won = dungeoncrawl::battleTurn(state, action);
       std::snprintf(message, sizeof(message), won ? "Encounter cleared. Choose the next route carefully."
-                                                  : "Turn resolved. Read the enemy intent and adapt.");
+                                                  : finisher ? "Combo finisher! Read the enemy intent and adapt."
+                                                             : "Turn resolved. Read the enemy intent and adapt.");
       dirty = true;
       save();
       requestUpdate();
@@ -236,10 +238,12 @@ void DungeonCrawlActivity::loop() {
     }
     if (view == View::Dungeon) {
       dungeoncrawl::beginEncounter(state);
-      const bool won = dungeoncrawl::battleTurn(state, static_cast<dungeoncrawl::BattleAction>(
-                                                         std::min(selected, 5)));
+      const auto action = static_cast<dungeoncrawl::BattleAction>(std::min(selected, 5));
+      const bool finisher = action == dungeoncrawl::BattleAction::Attack && dungeoncrawl::comboFinisherReady(state);
+      const bool won = dungeoncrawl::battleTurn(state, action);
       std::snprintf(message, sizeof(message), won ? "Encounter cleared. Choose the next route carefully."
-                                                  : "Turn resolved. Read the enemy intent and adapt.");
+                                                  : finisher ? "Combo finisher! Read the enemy intent and adapt."
+                                                             : "Turn resolved. Read the enemy intent and adapt.");
       dirty = true;
       save();
       requestUpdate();
@@ -388,6 +392,10 @@ void DungeonCrawlActivity::render(RenderLock&&) {
                   state.battleSkillCooldown, state.playerShield);
     dashboard::text(screen, fui::makeRect(hero.x + 12, hero.bottom() - 68, hero.width - 24, 24),
                     line, pixelui::kSmall, fui::TextAlign::Left);
+    std::snprintf(line, sizeof(line), "COMBO %u%s", state.combo,
+            dungeoncrawl::comboFinisherReady(state) ? "  FINISHER READY" : "");
+    dashboard::text(screen, fui::makeRect(hero.x + 12, hero.bottom() - 96, hero.width - 24, 24), line,
+            pixelui::kSmall, fui::TextAlign::Left);
 
     const int cardY = hero.bottom() + 10;
     const int cardW = (body.width - 30) / 3;

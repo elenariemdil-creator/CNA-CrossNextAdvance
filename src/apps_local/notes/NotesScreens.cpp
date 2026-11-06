@@ -969,11 +969,12 @@ void buildMenu(toybox::Screen& screen, const MenuModel& model) {
   readingui::caps(screen, fui::makeRect(b.x + 8, b.y, b.width - 16, 44), model.title, 0, 2);
   if (wide) {
     const int gap = 12, top = b.y + 52;
-    const int cardWidth = (b.width - gap) / 2, cardHeight = (b.bottom() - top - gap) / 2;
+    const int cardWidth = (b.width - gap) / 2, cardHeight = (b.bottom() - top - 2 * gap) / 3;
     const auto rename = fui::makeRect(b.x, top, cardWidth, cardHeight);
-    const auto phone = fui::makeRect(rename.right() + gap, top, cardWidth, cardHeight);
-    const auto sleep = fui::makeRect(b.x, rename.bottom() + gap, cardWidth, cardHeight);
-    const auto remove = fui::makeRect(phone.x, phone.bottom() + gap, cardWidth, cardHeight);
+    const auto duplicate = fui::makeRect(rename.right() + gap, top, cardWidth, cardHeight);
+    const auto phone = fui::makeRect(b.x, rename.bottom() + gap, cardWidth, cardHeight);
+    const auto remove = fui::makeRect(phone.right() + gap, phone.y, cardWidth, cardHeight);
+    const auto sleep = fui::makeRect(b.x, phone.bottom() + gap, b.width, cardHeight);
     const auto row = [&](const fui::Rect& rect, const char* label, const fui::BitmapRef& art, fui::ActionId action) {
       dashboard::frame(screen, rect, 2);
       compactart::draw(screen, fui::makeRect(rect.x + 12, rect.y + (rect.height - 40) / 2, 40, 40), art);
@@ -982,6 +983,7 @@ void buildMenu(toybox::Screen& screen, const MenuModel& model) {
       dashboard::hit(screen, rect, action);
     };
     row(rename, tr(STR_UI_RENAME_475608), compactart::Pencil, ActionRename);
+    row(duplicate, tr(STR_NOTES_DUPLICATE), compactart::Pencil, ActionDuplicate);
     row(phone, tr(STR_UI_SEND_NOTE_TO_YOUR_PHONE), compactart::Pencil, ActionUsePhone);
     row(remove, tr(STR_UI_DELETE_NOTE_12BEF2), compactart::Trash, ActionDelete);
     dashboard::frame(screen, sleep, 2);
@@ -995,12 +997,13 @@ void buildMenu(toybox::Screen& screen, const MenuModel& model) {
     dashboard::hit(screen, sleep, ActionShowAsleep);
     return;
   }
-  const int h = wide ? 64 : 88;
-  const int sleepH = wide ? 104 : 144, gap = 12;
-  const int stackH = h * 3 + sleepH + gap * 3;
+  const int h = wide ? 56 : 68;
+  const int sleepH = wide ? 96 : 112, gap = 12;
+  const int stackH = h * 4 + sleepH + gap * 4;
   const int top = b.y + 52 + std::max(0, (b.height - 52 - stackH) / 2);
   const auto rename = fui::makeRect(b.x, top, b.width, h);
-  const auto phone = fui::makeRect(b.x, rename.bottom() + gap, b.width, h);
+  const auto duplicate = fui::makeRect(b.x, rename.bottom() + gap, b.width, h);
+  const auto phone = fui::makeRect(b.x, duplicate.bottom() + gap, b.width, h);
   const auto sleep = fui::makeRect(b.x, phone.bottom() + gap, b.width, sleepH);
   const auto remove = fui::makeRect(b.x, sleep.bottom() + gap, b.width, h);
   dashboard::frame(screen, rename, 2);
@@ -1009,6 +1012,12 @@ void buildMenu(toybox::Screen& screen, const MenuModel& model) {
                   tr(STR_UI_RENAME_475608), 1);
   dashboard::chevron(screen.target(), fui::makeRect(rename.right() - 34, rename.y, 28, rename.height));
   dashboard::hit(screen, rename, ActionRename);
+  dashboard::frame(screen, duplicate, 2);
+  compactart::draw(screen, fui::makeRect(duplicate.x + 18, duplicate.y + (h - 44) / 2, 44, 44), compactart::Pencil);
+  readingui::caps(screen, fui::makeRect(duplicate.x + 90, duplicate.y, duplicate.width - 130, duplicate.height),
+                  tr(STR_NOTES_DUPLICATE), 1);
+  dashboard::chevron(screen.target(), fui::makeRect(duplicate.right() - 34, duplicate.y, 28, duplicate.height));
+  dashboard::hit(screen, duplicate, ActionDuplicate);
   dashboard::frame(screen, phone, 2);
   compactart::draw(screen, fui::makeRect(phone.x + 18, phone.y + (h - 44) / 2, 44, 44), compactart::Pencil);
   readingui::caps(screen, fui::makeRect(phone.x + 90, phone.y, phone.width - 130, phone.height),

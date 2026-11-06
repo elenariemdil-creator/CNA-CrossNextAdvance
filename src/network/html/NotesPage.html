@@ -56,6 +56,9 @@ li input:focus-visible{outline:3px solid var(--ink)}
 li .drop{flex:0 0 auto;font-family:var(--mono);font-size:.8rem;letter-spacing:.1em;color:var(--muted);
   background:transparent;border:0;padding:.5rem;margin-top:.35rem;cursor:pointer}
 .new textarea{background:var(--paper-2);padding-left:.75rem}
+.note-editor{display:block;width:100%;min-height:55vh;padding:1rem;border:2px solid var(--ink);border-radius:0;
+  background:var(--paper-2);color:var(--ink);font:inherit;line-height:1.55;resize:vertical;white-space:pre-wrap}
+[hidden]{display:none!important}
 
 .btn{display:block;width:100%;margin-top:1.4rem;font-family:var(--display);font-weight:400;font-size:1.3rem;
   letter-spacing:.03em;padding:.5em 1.15em .38em;border:3px solid var(--ink);
@@ -73,6 +76,7 @@ li .drop{flex:0 0 auto;font-family:var(--mono);font-size:.8rem;letter-spacing:.1
 <main>
 <p class="eyebrow" id="eyebrow">One line per thing</p>
 <ul id="rows"></ul>
+<textarea class="note-editor" id="note-editor" aria-label="Note text" hidden></textarea>
 <button class="btn" id="save" disabled>Save to the reader</button>
 <button class="btn secondary" id="copy" type="button" hidden>Copy note to messages app</button>
 <p class="foot" id="foot">Edits save to the reader over your local Wi-Fi.</p>
@@ -83,6 +87,7 @@ li .drop{flex:0 0 auto;font-family:var(--mono);font-size:.8rem;letter-spacing:.1
 // "[object HTMLElement]" and every write to it is silently dropped.
 (function () {
 var rowsEl = document.getElementById('rows');
+var noteEditor = document.getElementById('note-editor');
 var saveEl = document.getElementById('save');
 var copyEl = document.getElementById('copy');
 var stateEl = document.getElementById('state');
@@ -198,6 +203,7 @@ function addRow(item, isNew) {
 // Back to the file. The marker is written HERE and on the reader, never typed:
 // the device coerces anything it is sent anyway, so the two agree.
 function serialise() {
+  if (isNote) return noteEditor.value.replace(/\r\n?/g, '\n');
   var out = '';
   var items = rowsEl.querySelectorAll('li');
   for (var i = 0; i < items.length; i++) {
@@ -230,6 +236,8 @@ function load() {
     if (!r.ok) throw new Error(r.status);
     nameEl.textContent = decodeURIComponent(r.headers.get('X-Note-Name') || 'Notes');
     isNote = r.headers.get('X-Note-Kind') === 'note';
+    rowsEl.hidden = isNote;
+    noteEditor.hidden = !isNote;
     copyEl.hidden = !isNote;
     footEl.textContent = isNote ? 'Copy this note into SMS or another messaging app, or save edits back to the reader.'
                   : 'Edits save to the reader over your local Wi-Fi.';
@@ -240,13 +248,17 @@ function load() {
     // halfway through is the one failure this page could cause that costs real
     // work, and the reader is not the authority while a phone has the keyboard.
     if (loaded !== null && serialise() !== loaded) return;
-    rowsEl.innerHTML = '';
-    var lines = body.split('\n');
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i].replace(/\r$/, '').trim() === '') continue;
-      addRow(parseLine(lines[i].replace(/\r$/, '')), false);
+    if (isNote) {
+      noteEditor.value = body.replace(/\r\n?/g, '\n');
+    } else {
+      rowsEl.innerHTML = '';
+      var lines = body.split('\n');
+      for (var i = 0; i < lines.length; i++) {
+        if (lines[i].replace(/\r$/, '').trim() === '') continue;
+        addRow(parseLine(lines[i].replace(/\r$/, '')), false);
+      }
+      addRow({ done: false, text: '' }, true);
     }
-    addRow({ done: false, text: '' }, true);
     loaded = serialise();
     saveEl.disabled = false;
     say('Ready');
@@ -274,6 +286,7 @@ saveEl.addEventListener('click', function () {
     say(String(e.message || e).slice(0, 40));
   });
 });
+noteEditor.addEventListener('input', function () { say('Unsaved changes'); });
 copyEl.addEventListener('click', copyNote);
 
 load();

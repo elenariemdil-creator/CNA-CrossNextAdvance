@@ -229,8 +229,12 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     QUICK_RESUME_SLEEP_SCREEN_COUNT
   };
 
+  enum SLEEP_SCREEN_CYCLE_ORDER { SLEEP_SCREEN_CYCLE_RANDOM = 0, SLEEP_SCREEN_CYCLE_ORDERED = 1 };
+
   // Sleep screen settings
   uint8_t sleepScreen = DARK;
+  uint8_t cycleSleepScreen = 0;
+  uint8_t sleepScreenCycleOrder = SLEEP_SCREEN_CYCLE_RANDOM;
   // Night mode: inverted output polarity, applied to every activity per
   // render by ActivityManager. The sleep screen opts out itself.
   uint8_t screenInverted = 0;
@@ -349,6 +353,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t libraryClassicGrid = 1, libraryClassicExpanded = 0;
   uint8_t librarySortMethod = 0, librarySortDirections = 1;
   uint8_t libraryExpandedList = 1;
+  uint8_t libraryShowAllRecent = 0;
   uint8_t libraryDisplay = 7;     // Finished books, series and genre.
   uint8_t libraryFileTypes = 15;  // EPUB, XTC/XTCH, TXT and Markdown.
   uint8_t weekStartsSunday = 0;

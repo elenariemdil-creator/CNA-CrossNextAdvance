@@ -31,6 +31,7 @@ enum : fui::ActionId {
   ActionSwitchKind = 352,
   ActionShowAsleep = 353,
   ActionDismiss = 349,
+  ActionDuplicate = 358,
 };
 
 // --- The deck ------------------------------------------------------------

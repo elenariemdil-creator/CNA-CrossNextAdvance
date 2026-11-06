@@ -6,13 +6,20 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <algorithm>
+#include <cctype>
+#include <string_view>
+
 #include "CrossPointSettings.h"
 #include "DictionaryDefinitionActivity.h"
 #include "components/UITheme.h"
+#include "util/HtmlToPlainText.h"
 
 namespace {
 
 constexpr unsigned long POPUP_DURATION_MS = 1500;
+constexpr size_t MAX_MULTIWORD_TERMS = 8;
+constexpr size_t MAX_MULTIWORD_DEFINITION_BYTES = 16 * 1024;
 
 void indexBuildYield(void*) { vTaskDelay(1); }
 
@@ -21,6 +28,35 @@ void indexBuildYield(void*) { vTaskDelay(1); }
 void DictionaryWordSelectActivity::onEnter() {
   Activity::onEnter();
   fontId = SETTINGS.getReaderFontId();
+  lookupDictionary = translate ? SETTINGS.translationDictionaryName : SETTINGS.dictionaryName;
+  std::vector<DictionaryEntry> dictionaries;
+  DictionaryRegistry::discover(dictionaries);
+  dictionaries.erase(std::remove_if(dictionaries.begin(), dictionaries.end(), [](const DictionaryEntry& entry) {
+                       return entry.name.size() >= sizeof(SETTINGS.dictionaryName);
+                     }),
+                     dictionaries.end());
+  if (dictionaries.size() > 1) {
+    auto picker = makeUniqueNoThrow<DictionaryPickerActivity>(renderer, mappedInput, lookupDictionary, translate);
+    if (picker) {
+      startActivityForResult(std::move(picker), [this](const ActivityResult& result) {
+        if (result.isCancelled) {
+          finish();
+          return;
+        }
+        const auto* selected = std::get_if<FilePathResult>(&result.data);
+        if (!selected || selected->path.empty()) {
+          finish();
+          return;
+        }
+        lookupDictionary = selected->path;
+        popupMsg = StrId::STR_DICT_LOOKING_UP;
+        popup = Popup::Busy;
+        lookupPending = true;
+        requestUpdate();
+      });
+      return;
+    }
+  }
   lookupPending = true;
   popupMsg = StrId::STR_DICT_LOOKING_UP;
   popup = Popup::Busy;
@@ -35,7 +71,7 @@ void DictionaryWordSelectActivity::performLookup() {
   }
   if (!dictOpenAttempted) {
     dictOpenAttempted = true;
-    dictOpenOk = dict.open(translate ? SETTINGS.translationDictionaryName : SETTINGS.dictionaryName);
+    dictOpenOk = dict.open(lookupDictionary.c_str());
     // needsIndex() opens and validates the .qidx sidecar, so ask it once per
     // open rather than once per word: the answer only changes when we build
     // the sidecar ourselves, which is handled below.
@@ -57,7 +93,72 @@ void DictionaryWordSelectActivity::performLookup() {
   std::string definition;
   std::string headword;
   Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
-  const bool found = ok && dict.lookup(lookupText.c_str(), definition, headword, &result);
+  bool found = ok && dict.lookup(lookupText.c_str(), definition, headword, &result);
+  bool combinedMultiwordDefinition = false;
+
+  if (ok && !found && result == Dictionary::LookupResult::NotFound) {
+    const std::string_view query(lookupText);
+    const bool hasWhitespace = std::any_of(query.begin(), query.end(), [](const unsigned char c) {
+      return std::isspace(c) != 0;
+    });
+    if (hasWhitespace) {
+      std::string combined;
+      std::string termDefinition;
+      std::string termHeadword;
+      const bool htmlDefinitions = dict.definitionsAreHtml();
+      size_t termCount = 0;
+      size_t position = 0;
+      bool lookupFailed = false;
+      while (position < query.size() && termCount < MAX_MULTIWORD_TERMS) {
+        while (position < query.size() && std::isspace(static_cast<unsigned char>(query[position]))) ++position;
+        const size_t start = position;
+        while (position < query.size() && !std::isspace(static_cast<unsigned char>(query[position]))) ++position;
+        if (start == position) continue;
+        ++termCount;
+
+        const std::string term(query.substr(start, position - start));
+        Dictionary::LookupResult termResult = Dictionary::LookupResult::NotFound;
+        if (!dict.lookup(term.c_str(), termDefinition, termHeadword, &termResult)) {
+          if (termResult != Dictionary::LookupResult::NotFound) {
+            result = termResult;
+            lookupFailed = true;
+            break;
+          }
+          continue;
+        }
+
+        std::string plainDefinition = htmlDefinitions ? htmlToPlainText(termDefinition) : termDefinition;
+        const std::string_view label = termHeadword.empty() ? std::string_view(term) : std::string_view(termHeadword);
+        const size_t separatorBytes = combined.empty() ? 0 : 2;
+        const size_t prefixBytes = separatorBytes + label.size() + 1;
+        if (combined.size() + prefixBytes >= MAX_MULTIWORD_DEFINITION_BYTES) break;
+        const size_t available = MAX_MULTIWORD_DEFINITION_BYTES - combined.size() - prefixBytes;
+        if (plainDefinition.size() > available) {
+          if (available <= 3) break;
+          size_t clipped = available - 3;
+          while (clipped > 0 && (static_cast<unsigned char>(plainDefinition[clipped]) & 0xC0) == 0x80) --clipped;
+          plainDefinition.resize(clipped);
+          plainDefinition += "...";
+        }
+        if (separatorBytes) combined += "\n\n";
+        combined.append(label.data(), label.size());
+        combined += '\n';
+        combined += plainDefinition;
+      }
+
+      if (lookupFailed) {
+        definition.clear();
+        headword.clear();
+        found = false;
+      } else if (!combined.empty()) {
+        definition = std::move(combined);
+        headword = lookupText;
+        found = true;
+        combinedMultiwordDefinition = true;
+        result = Dictionary::LookupResult::Found;
+      }
+    }
+  }
 
   if (found) {
     vocabulary::CaptureNotice notice;
@@ -71,7 +172,8 @@ void DictionaryWordSelectActivity::performLookup() {
       page.reset();
     }
     auto activity = makeUniqueNoThrow<DictionaryDefinitionActivity>(
-        renderer, mappedInput, std::move(headword), std::move(definition), dict.definitionsAreHtml(), notice);
+      renderer, mappedInput, std::move(headword), std::move(definition),
+      combinedMultiwordDefinition ? false : dict.definitionsAreHtml(), notice);
     if (!activity) {
       LOG_ERR("DICT", "OOM: definition activity");
       popup = Popup::Error;
@@ -84,8 +186,7 @@ void DictionaryWordSelectActivity::performLookup() {
       source->purpose = translate ? vocabulary::Purpose::Language : vocabulary::Purpose::Vocabulary;
       if (!vocabulary::copy(source->surface, sizeof(source->surface), lookupText.c_str())) source->surface[0] = 0;
       activity->offerVocabulary(std::move(source),
-                                translate ? SETTINGS.translationDictionaryName : SETTINGS.dictionaryName,
-                                sourceLanguage.c_str());
+                                lookupDictionary.c_str(), sourceLanguage.c_str());
     }
     startActivityForResult(std::move(activity), [this](const ActivityResult&) { finish(); });
     return;

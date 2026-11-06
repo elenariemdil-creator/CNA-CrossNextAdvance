@@ -22,6 +22,14 @@ Carousel 2 and Bookshelf use unboxed rows with regular names, left icons and gra
 
 All four themes use two tabs: **Recent** and **Filter**. Recent retains up to 30 opened books, in reading order. Its portrait list has nine rows with titles wrapping to two lines, without an author subtitle. Its header button switches between a book list and covers (nine covers per portrait page, four in landscape). New unread books appear in the indexed filters and on the Bookshelf Home shelf.
 
+Filter → Collections contains user-created reading lists. Create a list, then
+long-press a book in Recent and choose **Add to collection**. Open a collection
+to browse its books in title order; long-press a book there to open it or remove
+it from that collection. Long-press a collection name to delete the list.
+Collections store book-path fingerprints separately from the library index, so
+rebuilding the index does not erase them. Each device stores at most eight
+collections with 256 books each.
+
 Filter first asks for Genre, Series, Author first name, Author last name or First letter of title. It then shows rows for values found in the microSD's metadata. Choosing one shows only matching books, with titles wrapping to two lines. Author choices use the same person's full name, ordered by first or last name. Series use their volume order. Missing metadata has a separate Unknown/No series/No genre choice; it is never invented from the filename. Back returns from books to values, then categories and Recent. These filters last for the current Library visit. The previous alternative Sort by layout is no longer offered.
 
 The header refresh button updates the index. The list/cover button changes the Recent view. Saved metadata and format preferences remain compatible; the filter categories do not include a Library settings entry. Files and Library use the existing index and bounded row windows; browsing does not parse every book again. Bookshelf's Appearance setting reads **Number of pages** and limits its bookshelf to one through ten pages. In other Home themes the same setting controls recent books. Only the visible shelf page prepares covers.
